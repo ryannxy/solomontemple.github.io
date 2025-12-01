@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Solomon's Temple Interactive Explorer</title>
+    
+    <!-- React 18 -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    
+    <!-- Babel -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Three.js (r128) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Lato:wght@400;700&display=swap" rel="stylesheet">
+
+    <style>
+        body { font-family: 'Lato', sans-serif; background-color: #fdfbf7; }
+        h1, h2, h3, h4, .cinzel { font-family: 'Cinzel', serif; }
+        .parchment {
+            background-color: #fdfbf7;
+            background-image: url("data:image/svg+xml,%3Csvg width='100' height='100' viewBox='0 0 100 100' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.6' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100' height='100' fill='%23fdfbf7'/%3E%3Crect width='100' height='100' fill='transparent' filter='url(%23noise)' opacity='0.05'/%3E%3C/svg%3E");
+        }
+        .temple-part:hover { filter: drop-shadow(0 0 8px rgba(255, 215, 0, 0.6)); cursor: pointer; transition: all 0.3s ease; }
+        #debug-console { display: none; position: fixed; top: 10px; left: 10px; right: 10px; background: #fee2e2; border: 2px solid #ef4444; color: #b91c1c; padding: 15px; z-index: 10000; font-family: monospace; white-space: pre-wrap; pointer-events: none; }
+        
+        /* Joystick */
+        .joystick-zone { position: absolute; bottom: 30px; left: 30px; width: 140px; height: 140px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.4); background: rgba(0,0,0,0.1); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; touch-action: none; }
+        .joystick-knob { width: 60px; height: 60px; border-radius: 50%; background: rgba(255,255,255,0.9); box-shadow: 0 4px 10px rgba(0,0,0,0.3); pointer-events: none; transform: translate(0px, 0px); }
+        
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; }
+        ::-webkit-scrollbar-thumb { background: #c5a059; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #a38243; }
+    </style>
+</head>
+<body class="parchment text-slate-800 min-h-screen">
+    <div id="debug-console"></div>
+    <div id="root"></div>
+
+    <script>
+        window.onerror = function(message, source, lineno, colno, error) {
+            const consoleDiv = document.getElementById('debug-console');
+            consoleDiv.style.display = 'block';
+            consoleDiv.innerHTML += `<strong>Error:</strong> ${message}\n<small>Line: ${lineno}</small>\n\n`;
+            return false;
+        };
+    </script>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // --- Data Definitions ---
+        const templeData = {
+            outer_court: { title: "The Inner Court", desc: "The enclosed area surrounding the temple building where sacrifices were performed. It contained the Altar and the Molten Sea.", ref: "1 Kings 6:36" },
+            altar: { title: "Altar of Burnt Offering", desc: "A massive bronze altar located centrally in the courtyard. 20 cubits square, 10 cubits high.", ref: "2 Chronicles 4:1" },
+            sea: { title: "The Molten Sea", desc: "A gigantic bronze basin resting on twelve bronze oxen, located on the South-East side.", ref: "1 Kings 7:23-26" },
+            jachin_boaz: { title: "Jachin & Boaz", desc: "Two massive bronze pillars flanking the vestibule entrance. Jachin (South/Right) and Boaz (North/Left).", ref: "1 Kings 7:15-22" },
+            porch: { title: "The Porch (Ulam)", desc: "The entrance hall (20x10 cubits) separating the holy areas from the court.", ref: "1 Kings 6:3" },
+            holy_place: { title: "The Holy Place (Hechal)", desc: "The main sanctuary (40x20 cubits) containing the Menorahs, Showbread, and Altar of Incense.", ref: "1 Kings 6:17" },
+            menorah: { title: "Golden Lampstands", desc: "Ten golden lampstands (Menorahs) lining the walls.", ref: "1 Kings 7:49" },
+            showbread: { title: "Table of Showbread", desc: "Tables holding the showbread.", ref: "1 Kings 7:48" },
+            incense: { title: "Altar of Incense", desc: "Small golden altar for burning incense before the veil.", ref: "1 Kings 7:48" },
+            holy_of_holies: { title: "Holy of Holies (Dvir)", desc: "The most sacred inner sanctuary (20x20x20 cubits), housing the Ark.", ref: "1 Kings 6:20" },
+            ark: { title: "Ark of the Covenant", desc: "Gold-plated chest containing the Ten Commandments.", ref: "1 Kings 8:6" },
+            chambers: { title: "Side Chambers", desc: "A three-story structure for storage wrapping around the main walls.", ref: "1 Kings 6:5-10" }
+        };
+
+        // --- Helper Components ---
+        const NavButton = ({ active, label, onClick, icon }) => (
+            <button onClick={onClick} className={`flex items-center gap-2 px-4 py-2 md:px-6 md:py-3 rounded-t-lg font-bold transition-colors duration-200 whitespace-nowrap ${active ? 'bg-white text-yellow-700 border-t-4 border-yellow-600 shadow-sm' : 'bg-stone-200 text-stone-600 hover:bg-stone-100'}`}>
+                {icon} {label}
+            </button>
+        );
+
+        const Modal = ({ data, onClose }) => {
+            if (!data) return null;
+            return (
+                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
+                    <div className="bg-white rounded-lg max-w-lg w-full shadow-2xl overflow-hidden border-2 border-[#bf953f]" onClick={e => e.stopPropagation()}>
+                        <div className="h-2 bg-yellow-500 w-full"></div>
+                        <div className="p-6">
+                            <div className="flex justify-between items-start mb-4">
+                                <h3 className="text-2xl font-bold cinzel">{data.title}</h3>
+                                <button onClick={onClose} className="text-stone-400 hover:text-red-500 font-bold">✕</button>
+                            </div>
+                            <p className="text-stone-600 mb-4">{data.desc}</p>
+                            <div className="bg-stone-100 p-2 rounded text-sm italic">Ref: {data.ref}</div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const Joystick = ({ onMove }) => {
+            const containerRef = useRef(null);
+            const [pos, setPos] = useState({ x: 0, y: 0 });
+            const active = useRef(false);
+            const center = useRef({ x: 0, y: 0 });
+
+            const handleStart = (e) => {
+                active.current = true;
+                const rect = containerRef.current.getBoundingClientRect();
+                center.current = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+                updateMove(e);
+            };
+
+            const updateMove = (e) => {
+                if (!active.current) return;
+                const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+                const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+                
+                let dx = clientX - center.current.x;
+                let dy = clientY - center.current.y;
+                const maxRadius = 50; 
+                
+                const dist = Math.sqrt(dx*dx + dy*dy);
+                if (dist > maxRadius) {
+                    const ratio = maxRadius / dist;
+                    dx *= ratio; dy *= ratio;
+                }
+
+                setPos({ x: dx, y: dy });
+                onMove({ x: dx / maxRadius, y: -(dy / maxRadius) });
+            };
+
+            const handleEnd = () => {
+                active.current = false;
+                setPos({ x: 0, y: 0 });
+                onMove({ x: 0, y: 0 });
+            };
+
+            useEffect(() => {
+                const move = (e) => updateMove(e);
+                const end = () => handleEnd();
+                window.addEventListener('touchmove', move); window.addEventListener('touchend', end);
+                window.addEventListener('mousemove', move); window.addEventListener('mouseup', end);
+                return () => {
+                    window.removeEventListener('touchmove', move); window.removeEventListener('touchend', end);
+                    window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', end);
+                };
+            }, []);
+
+            return (
+                <div ref={containerRef} className="joystick-zone" onMouseDown={handleStart} onTouchStart={handleStart}>
+                    <div className="joystick-knob" style={{ transform: `translate(${pos.x}px, ${pos.y}px)` }}></div>
+                </div>
+            );
+        };
+
+        const MapView = ({ onSelect }) => (
+            <div className="w-full overflow-x-auto bg-stone-100 rounded-lg border border-stone-300">
+                <div className="min-w-[800px] p-4 flex justify-center">
+                    <svg viewBox="0 0 900 600" className="w-full h-auto drop-shadow-xl select-none">
+                        <defs><pattern id="stonePattern" patternUnits="userSpaceOnUse" width="20" height="20"><rect width="20" height="20" fill="#e5e5e5"/><path d="M0 10h20M10 0v20" stroke="#d4d4d4" strokeWidth="0.5"/></pattern></defs>
+                        <rect x="50" y="50" width="800" height="500" fill="url(#stonePattern)" stroke="#a8a29e" strokeWidth="2" />
+                        <text x="800" y="530" className="text-xs fill-stone-500 font-bold" textAnchor="end">EAST (Entrance)</text>
+                        <text x="100" y="530" className="text-xs fill-stone-500 font-bold" textAnchor="start">WEST</text>
+                        <text x="450" y="80" textAnchor="middle" className="text-xs fill-stone-500 font-bold">NORTH</text>
+                        <g className="temple-part group" onClick={() => onSelect('chambers')}><rect x="150" y="200" width="50" height="200" fill="#d6d3d1" stroke="#57534e" strokeWidth="1" /><rect x="200" y="200" width="300" height="50" fill="#d6d3d1" stroke="#57534e" strokeWidth="1" /><rect x="200" y="350" width="300" height="50" fill="#d6d3d1" stroke="#57534e" strokeWidth="1" /><title>Side Chambers</title></g>
+                        <g><g className="temple-part" onClick={() => onSelect('holy_of_holies')}><rect x="200" y="250" width="100" height="100" fill="#fbbf24" stroke="#b45309" strokeWidth="3" /><text x="250" y="300" textAnchor="middle" fontSize="10" className="pointer-events-none fill-yellow-900 font-bold">HOLY OF<br/>HOLIES</text><rect x="235" y="290" width="30" height="20" fill="#fcd34d" stroke="#b45309" /></g><g className="temple-part" onClick={() => onSelect('holy_place')}><rect x="300" y="250" width="200" height="100" fill="#fef9c3" stroke="#eab308" strokeWidth="3" /><text x="400" y="300" textAnchor="middle" fontSize="12" className="pointer-events-none fill-yellow-800 font-bold tracking-widest">HOLY PLACE</text><circle cx="350" cy="270" r="3" fill="#eab308" /> <circle cx="350" cy="330" r="3" fill="#eab308" /><circle cx="450" cy="270" r="3" fill="#eab308" /> <circle cx="450" cy="330" r="3" fill="#eab308" /><rect x="310" y="295" width="10" height="10" fill="#eab308" /></g><g className="temple-part" onClick={() => onSelect('porch')}><rect x="500" y="250" width="50" height="100" fill="#f5f5f4" stroke="#78716c" strokeWidth="2" /><text x="525" y="300" textAnchor="middle" fontSize="10" className="pointer-events-none fill-stone-600 font-bold" transform="rotate(-90 525 300)">PORCH</text></g></g>
+                        <g className="temple-part" onClick={() => onSelect('jachin_boaz')}><circle cx="560" cy="330" r="8" fill="#cd7f32" stroke="#78350f" strokeWidth="2" /><text x="560" y="355" textAnchor="middle" fontSize="8" fill="#78350f" fontWeight="bold">Jachin</text><circle cx="560" cy="270" r="8" fill="#cd7f32" stroke="#78350f" strokeWidth="2" /><text x="560" y="260" textAnchor="middle" fontSize="8" fill="#78350f" fontWeight="bold">Boaz</text></g>
+                        <g className="temple-part" onClick={() => onSelect('altar')}><rect x="650" y="275" width="50" height="50" fill="#7f1d1d" stroke="#450a0a" strokeWidth="2" /><rect x="665" y="290" width="20" height="20" fill="#ef4444" opacity="0.5" /><text x="675" y="345" textAnchor="middle" fontSize="10" fill="#450a0a" fontWeight="bold">Altar</text><path d="M700 290 L730 310 L730 290 Z" fill="#a8a29e" /></g>
+                        <g className="temple-part" onClick={() => onSelect('sea')}><circle cx="620" cy="420" r="35" fill="#60a5fa" stroke="#1e40af" strokeWidth="2" opacity="0.8" /><text x="620" y="425" textAnchor="middle" fontSize="10" fill="#1e3a8a" fontWeight="bold">The Sea</text><circle cx="620" cy="380" r="2" fill="#cd7f32" /> <circle cx="620" cy="460" r="2" fill="#cd7f32" /><circle cx="580" cy="420" r="2" fill="#cd7f32" /> <circle cx="660" cy="420" r="2" fill="#cd7f32" /></g>
+                        <g>{[0,1,2,3,4].map(i => <circle key={`n${i}`} cx={250 + (i*60)} cy="180" r="5" fill="#cd7f32" stroke="black" strokeWidth="0.5" />)}{[0,1,2,3,4].map(i => <circle key={`s${i}`} cx={250 + (i*60)} cy="420" r="5" fill="#cd7f32" stroke="black" strokeWidth="0.5" />)}<text x="180" y="185" fontSize="9" fill="#78350f" fontStyle="italic">Lavers</text><text x="180" y="425" fontSize="9" fill="#78350f" fontStyle="italic">Lavers</text></g>
+                        <text x="450" y="570" textAnchor="middle" className="cinzel text-xl fill-stone-400 font-bold opacity-50">THE INNER COURT</text>
+                    </svg>
+                </div>
+            </div>
+        );
+
+        const LearnSection = () => (
+            <div className="max-w-4xl mx-auto p-6 space-y-8 animate-fade-in">
+                <div className="grid md:grid-cols-2 gap-8 items-center">
+                    <div>
+                        <h2 className="text-3xl cinzel text-[#78350f] mb-4 border-b-2 border-[#eab308] pb-2 inline-block">Historical Context</h2>
+                        <p className="text-stone-700 leading-relaxed mb-4">King Solomon's Temple (First Temple) was built in Jerusalem on Mount Moriah around 966 BC. It was a permanent resting place for the Ark of the Covenant.</p>
+                    </div>
+                    <div className="bg-stone-800 p-6 rounded-lg text-stone-200 shadow-xl border border-[#b38728]">
+                        <h3 className="text-xl cinzel text-[#eab308] mb-3">Key Dimensions</h3>
+                        <ul className="space-y-2 text-sm">
+                            <li className="flex justify-between border-b border-stone-700 pb-2"><span>Length</span><span className="font-mono text-[#eab308]">60 cubits (~27m)</span></li>
+                            <li className="flex justify-between border-b border-stone-700 pb-2"><span>Width</span><span className="font-mono text-[#eab308]">20 cubits (~9m)</span></li>
+                            <li className="flex justify-between border-b border-stone-700 pb-2"><span>Height</span><span className="font-mono text-[#eab308]">30 cubits (~13.5m)</span></li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        );
+
+        const Quiz = () => {
+            const [currentQuestion, setCurrentQuestion] = useState(0);
+            const [score, setScore] = useState(0);
+            const [showResults, setShowResults] = useState(false);
+            const [selectedAnswer, setSelectedAnswer] = useState(null);
+            const [isCorrect, setIsCorrect] = useState(null);
+
+            const handleAnswer = (index) => {
+                if (selectedAnswer !== null) return;
+                setSelectedAnswer(index);
+                const correct = index === quizQuestions[currentQuestion].answer;
+                setIsCorrect(correct);
+                if (correct) setScore(score + 1);
+                setTimeout(() => {
+                    if (currentQuestion < quizQuestions.length - 1) {
+                        setCurrentQuestion(currentQuestion + 1); setSelectedAnswer(null); setIsCorrect(null);
+                    } else setShowResults(true);
+                }, 1500);
+            };
+            
+            if (showResults) return (
+                <div className="flex flex-col items-center justify-center h-full p-8 text-center animate-fade-in">
+                    <div className="text-6xl mb-4">{score === quizQuestions.length ? "🏆" : score > quizQuestions.length / 2 ? "📜" : "🕯️"}</div>
+                    <h2 className="text-3xl cinzel text-[#78350f] mb-4">Quiz Complete!</h2>
+                    <p className="text-xl mb-6">You scored <span className="font-bold text-[#b38728]">{score}</span> out of <span className="font-bold">{quizQuestions.length}</span></p>
+                    <button onClick={() => { setCurrentQuestion(0); setScore(0); setShowResults(false); setSelectedAnswer(null); setIsCorrect(null); }} className="bg-[#b38728] text-white px-8 py-3 rounded-lg hover:bg-[#96701f] transition shadow-lg font-bold">Try Again</button>
+                </div>
+            );
+            const question = quizQuestions[currentQuestion];
+            return (
+                <div className="max-w-2xl mx-auto p-4 md:p-8">
+                    <div className="mb-6 flex justify-between items-end"><span className="text-sm font-bold text-stone-400 tracking-widest">QUESTION {currentQuestion + 1}/{quizQuestions.length}</span><span className="text-sm text-stone-400">Score: {score}</span></div>
+                    <div className="bg-white p-8 rounded-xl shadow-lg border-b-4 border-[#b38728] mb-6"><h3 className="text-xl md:text-2xl font-bold text-stone-800 mb-2">{question.question}</h3></div>
+                    <div className="space-y-3">
+                        {question.options.map((option, index) => {
+                            let btnClass = "w-full p-4 text-left rounded-lg border-2 transition-all duration-200 font-medium ";
+                            if (selectedAnswer === null) btnClass += "bg-white border-stone-200 hover:border-[#b38728] hover:bg-yellow-50 text-stone-600";
+                            else if (index === question.answer) btnClass += "bg-green-100 border-green-500 text-green-800";
+                            else if (index === selectedAnswer) btnClass += "bg-red-100 border-red-500 text-red-800";
+                            else btnClass += "bg-stone-50 border-stone-100 text-stone-400";
+                            return (<button key={index} onClick={() => handleAnswer(index)} disabled={selectedAnswer !== null} className={btnClass}><span className="mr-3 inline-block w-6 h-6 rounded-full bg-stone-200 text-stone-500 text-xs leading-6 text-center">{String.fromCharCode(65 + index)}</span>{option}</button>);
+                        })}
+                    </div>
+                    <div className="mt-6 h-8 text-center font-bold">{selectedAnswer !== null && <span className={isCorrect ? "text-green-600" : "text-red-500"}>{isCorrect ? "Correct! Well done." : "Incorrect."}</span>}</div>
+                </div>
+            );
+        };
+
+        const GameBtn = ({ action, label, className, onStart, onEnd }) => (
+            <button className={`absolute w-12 h-12 bg-white/20 backdrop-blur-md border-2 border-white/50 rounded-full flex items-center justify-center text-white active:bg-yellow-500 font-bold select-none touch-none ${className}`}
+                onMouseDown={(e) => onStart(action, e)} onMouseUp={(e) => onEnd(action, e)} onMouseLeave={(e) => onEnd(action, e)}
+                onTouchStart={(e) => onStart(action, e)} onTouchEnd={(e) => onEnd(action, e)}>{label}</button>
+        );
+
+        const Temple3D = () => {
+            const mountRef = useRef(null);
+            const controlsRef = useRef({ moveForward: false, moveBackward: false, moveLeft: false, moveRight: false, joystick: {x:0, y:0} });
+            const [isError, setIsError] = useState(false);
+            const [resetTrigger, setResetTrigger] = useState(0);
+
+            useEffect(() => {
+                const container = mountRef.current;
+                if (!container) return;
+                let scene, camera, renderer, animationId;
+                let isDisposed = false;
+
+                // --- HELPER FUNCTIONS ---
+                const obstacles = [];
+                const addBox = (group, w, h, d, mat, x, y, z, isObstacle=false) => {
+                    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+                    m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true;
+                    group.add(m);
+                    if(isObstacle) obstacles.push({type:'rect', x, z, width:w, depth:d});
+                    return m;
+                };
+                const addCyl = (group, rt, rb, h, seg, mat, x, y, z, isObstacle=false) => {
+                    const m = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, h, seg), mat);
+                    m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true;
+                    group.add(m);
+                    if(isObstacle) obstacles.push({type:'circle', x, z, radius: Math.max(rt, rb)});
+                    return m;
+                };
+
+                try {
+                    // --- SCALE CONSTANTS ---
+                    const CUBIT = 0.524; 
+                    const METER = 1;
+
+                    // Init Scene
+                    scene = new THREE.Scene();
+                    scene.background = new THREE.Color(0x87CEEB);
+                    scene.fog = new THREE.Fog(0x87CEEB, 20, 150);
+
+                    camera = new THREE.PerspectiveCamera(60, container.clientWidth / container.clientHeight, 0.1, 500);
+                    camera.position.set(0, 1.7 * METER, 85 * METER); 
+
+                    renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+                    renderer.setSize(container.clientWidth, container.clientHeight);
+                    renderer.shadowMap.enabled = true;
+                    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+                    container.appendChild(renderer.domElement);
+
+                    // Lights
+                    const ambient = new THREE.AmbientLight(0xffffff, 0.6);
+                    scene.add(ambient);
+                    const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 0.5);
+                    scene.add(hemi);
+                    const sun = new THREE.DirectionalLight(0xfffec4, 1.0);
+                    sun.position.set(50 * METER, 100 * METER, 50 * METER);
+                    sun.castShadow = true;
+                    sun.shadow.mapSize.width = 2048; sun.shadow.mapSize.height = 2048;
+                    sun.shadow.camera.left = -50; sun.shadow.camera.right = 50;
+                    sun.shadow.camera.top = 50; sun.shadow.camera.bottom = -50;
+                    scene.add(sun);
+
+                    // Materials
+                    const mats = {
+                        stone: new THREE.MeshStandardMaterial({ color: 0xe8e6dc, roughness: 0.9 }),
+                        gold: new THREE.MeshStandardMaterial({ 
+                            color: 0xffd700, 
+                            metalness: 1.0, 
+                            roughness: 0.15,
+                            emissive: 0x332200,
+                            emissiveIntensity: 0.4
+                        }),
+                        bronze: new THREE.MeshStandardMaterial({ 
+                            color: 0xcd7f32, 
+                            metalness: 0.9, 
+                            roughness: 0.2,
+                            emissive: 0x221100,
+                            emissiveIntensity: 0.2
+                        }),
+                        floor: new THREE.MeshStandardMaterial({ color: 0x8b5a2b, roughness: 0.8 }),
+                        veil: new THREE.MeshStandardMaterial({ color: 0x660066, side: THREE.DoubleSide }),
+                        fire: new THREE.MeshBasicMaterial({ color: 0xff4500 }),
+                        water: new THREE.MeshStandardMaterial({ color: 0x4fa3d1, transparent: true, opacity: 0.8 }),
+                        interior: new THREE.MeshStandardMaterial({ 
+                            color: 0xffd700, 
+                            roughness: 0.2, 
+                            metalness: 0.8, 
+                            emissive: 0x332200,
+                            emissiveIntensity: 0.2 
+                        }),
+                        wood: new THREE.MeshStandardMaterial({ color: 0x5c4033, roughness: 0.9 }),
+                        ground: new THREE.MeshStandardMaterial({color: 0xd6d3d1})
+                    };
+
+                    const templeGroup = new THREE.Group();
+
+                    // --- CONSTANTS ---
+                    const templeLen = 60 * CUBIT;
+                    const templeWid = 20 * CUBIT;
+                    const templeHei = 30 * CUBIT;
+                    const hohHei = 20 * CUBIT; 
+                    const porchDep = 10 * CUBIT;
+                    const platformHei = 6 * CUBIT;
+                    const wallThick = 1.5 * METER;
+                    const iFy = platformHei + 0.1;
+
+                    // Define Z positions first
+                    const templeZ = -5 * METER; 
+                    const backWallZ = templeZ - (templeLen/2) - (wallThick/2); 
+                    
+                    // 1. Platform (Base at 0, Top at platformHei)
+                    const platW = templeWid + 15; 
+                    const platD = templeLen + porchDep + 15; 
+                    addBox(templeGroup, platW, platformHei, platD, mats.stone, 0, platformHei/2, 0); 
+                    
+                    // Stairs
+                    const stairCount = 12;
+                    const stairLen = 6; 
+                    const stairStart = (platD/2);
+                    const stepH = platformHei / stairCount;
+                    const stepD = stairLen / stairCount;
+                    
+                    for(let i=0; i<stairCount; i++) {
+                        const y = platformHei - (i * stepH) - (stepH/2);
+                        const z = stairStart + (i * stepD) + (stepD/2);
+                        addBox(templeGroup, 10, stepH, stepD, mats.stone, 0, y, z);
+                    }
+                    obstacles.push({type:'rect', x:-5.5, z:stairStart+3, width:1, depth:6});
+                    obstacles.push({type:'rect', x:5.5, z:stairStart+3, width:1, depth:6});
+
+                    // 2. Temple Walls
+                    const wallLen = templeLen + porchDep;
+                    const wY = platformHei + (templeHei/2);
+                    addBox(templeGroup, wallThick, templeHei, wallLen, mats.stone, -(templeWid/2 + wallThick/2), wY, templeZ, true); 
+                    addBox(templeGroup, wallThick, templeHei, wallLen, mats.stone, (templeWid/2 + wallThick/2), wY, templeZ, true);  
+                    
+                    // Interior Gold Paneling
+                    const innerWidthOffset = (templeWid/2) - 0.1;
+                    addBox(templeGroup, 0.2, templeHei, templeLen + porchDep - 2, mats.interior, -innerWidthOffset, platformHei + templeHei/2, templeZ); 
+                    addBox(templeGroup, 0.2, templeHei, templeLen + porchDep - 2, mats.interior, innerWidthOffset, platformHei + templeHei/2, templeZ);
+                    
+                    // Back Wall Interior
+                    addBox(templeGroup, templeWid, templeHei, 0.2, mats.interior, 0, wY, backWallZ + wallThick/2 + 0.1);
+                    addBox(templeGroup, templeWid + (wallThick*2), templeHei, wallThick, mats.stone, 0, wY, backWallZ, true);
+                    
+                    // Floor
+                    const totalStructureLen = templeLen + porchDep;
+                    addBox(templeGroup, templeWid, 0.1, totalStructureLen, mats.gold, 0, iFy, templeZ);
+
+                    // Roof & Ceiling
+                    addBox(templeGroup, templeWid + (wallThick*2), 1, wallLen + wallThick, mats.stone, 0, platformHei + templeHei, templeZ);
+                    // Ceiling
+                    addBox(templeGroup, templeWid, 0.2, wallLen, mats.gold, 0, platformHei + templeHei - 0.6, templeZ);
+
+                    // 3. Holy of Holies
+                    const hohDepth = 20 * CUBIT; 
+                    const hohCenterZ = backWallZ + wallThick/2 + (hohDepth/2); 
+                    const veilZ = backWallZ + wallThick/2 + hohDepth;
+                    const hohCeilY = iFy + hohHei;
+                    
+                    // Lower Ceiling (Gold Cube Top)
+                    const hohCeil = new THREE.Mesh(new THREE.BoxGeometry(templeWid, 0.2, hohDepth), mats.gold);
+                    hohCeil.position.set(0, hohCeilY, hohCenterZ);
+                    templeGroup.add(hohCeil);
+                    
+                    // Upper Wall (Between Cube and Main Roof)
+                    const upperH = templeHei - hohHei;
+                    addBox(templeGroup, templeWid, upperH, 0.5, mats.interior, 0, hohCeilY + upperH/2, veilZ);
+                    const veil = new THREE.Mesh(new THREE.PlaneGeometry(templeWid, hohHei), mats.veil);
+                    veil.position.set(0, iFy + hohHei/2, veilZ);
+                    templeGroup.add(veil);
+
+                    // 4. Porch
+                    const frontZ = templeZ + (wallLen/2);
+                    // Corrected Porch Wall Position
+                    const porchX = templeWid/2 + wallThick/2;
+                    addBox(templeGroup, wallThick, templeHei, 1.5, mats.stone, -porchX, wY, frontZ, true);
+                    addBox(templeGroup, wallThick, templeHei, 1.5, mats.stone, porchX, wY, frontZ, true);
+                    addBox(templeGroup, templeWid + (wallThick*2), 10, 1.5, mats.stone, 0, platformHei + templeHei - 5, frontZ);
+
+                    // 5. Pillars
+                    const pColH = 18 * CUBIT; 
+                    const pColZ = frontZ + 2;
+                    const pColY = platformHei + pColH/2;
+                    addCyl(templeGroup, 1, 1, pColH, 32, mats.bronze, -5, pColY, pColZ, true);
+                    addCyl(templeGroup, 1, 1, pColH, 32, mats.bronze, 5, pColY, pColZ, true);
+                    addCyl(templeGroup, 1.5, 1.2, 2.5, 16, mats.bronze, -5, platformHei + pColH + 1.25, pColZ);
+                    addCyl(templeGroup, 1.5, 1.2, 2.5, 16, mats.bronze, 5, platformHei + pColH + 1.25, pColZ);
+
+                    // 6. Altar
+                    const altarZ = 55; // Moved Back
+                    const altarH = 10 * CUBIT; 
+                    const altarW = 20 * CUBIT;
+                    addBox(templeGroup, altarW, altarH, altarW, mats.bronze, 0, altarH/2, altarZ, true);
+                    // Horns
+                    const hornGeo = new THREE.ConeGeometry(0.5, 1.5, 16);
+                    const hornY = altarH + 0.75;
+                    const hornOffset = (altarW/2) - 0.5;
+                    [[-1, -1], [1, -1], [-1, 1], [1, 1]].forEach(([ox, oz]) => {
+                        const h = new THREE.Mesh(hornGeo, mats.bronze);
+                        h.position.set(ox * hornOffset, hornY, altarZ + (oz * hornOffset));
+                        templeGroup.add(h);
+                    });
+                    // Ramp
+                    const ramp = new THREE.Mesh(new THREE.BoxGeometry(5, 0.5, 15), mats.stone);
+                    const rampZ = altarZ + (altarW/2) + (15/2) - 1;
+                    ramp.position.set(0, altarH/2, rampZ); 
+                    ramp.rotation.x = Math.atan(altarH / 15); 
+                    templeGroup.add(ramp);
+                    obstacles.push({type:'rect', x:0, z:altarZ+5, width:5, depth:20});
+
+                    // 7. Sea
+                    const seaX = -20; const seaZ = 30;
+                    const seaH = 2.5; const oxH = 1.5; 
+                    addBox(templeGroup, 6, oxH, 6, mats.bronze, seaX, oxH/2, seaZ, true);
+                    addCyl(templeGroup, 2.5, 2, seaH, 32, mats.bronze, seaX, oxH + seaH/2, seaZ);
+                    obstacles.push({type:'circle', x:seaX, z:seaZ, radius:3});
+
+                    // 8. Side Chambers (Stepped)
+                    const storyH = 5 * CUBIT;
+                    
+                    for(let i=0; i<3; i++) {
+                        const currentW = (5 + i) * CUBIT; 
+                        const currentY = platformHei + (i * storyH) + (storyH/2);
+                        
+                        const sideX = (templeWid/2) + wallThick + (currentW/2);
+                        
+                        // North (Right)
+                        addBox(templeGroup, currentW, storyH, wallLen, mats.stone, sideX, currentY, templeZ, true);
+                        
+                        // South (Left)
+                        addBox(templeGroup, currentW, storyH, wallLen, mats.stone, -sideX, currentY, templeZ, true);
+                        
+                        // West (Back)
+                        const backW = templeWid + (wallThick*2) + (currentW*2);
+                        const backZ = backWallZ - (wallThick/2) - (currentW/2);
+                        addBox(templeGroup, backW, storyH, currentW, mats.stone, 0, currentY, backZ, true);
+                    }
+
+                    // 9. Furnishings
+                    const arkZ = hohCenterZ;
+                    addBox(templeGroup, 1.25, 0.75, 0.75, mats.gold, 0, iFy + 0.375, arkZ, true);
+                    
+                    const createDetailedMenorah = (gx, gz) => {
+                        const mGroup = new THREE.Group();
+                        const base = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.6, 0.2, 6), mats.gold); base.position.y = 0.1; mGroup.add(base);
+                        const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 1.8, 8), mats.gold); shaft.position.y = 0.9; mGroup.add(shaft);
+                        [0.3, 0.5, 0.7].forEach(r => {
+                             const geo = new THREE.TorusGeometry(r, 0.04, 8, 16, Math.PI);
+                             const branch = new THREE.Mesh(geo, mats.gold); branch.rotation.z = Math.PI; branch.position.y = 1.3 + (r*0.3); mGroup.add(branch);
+                             const pl1 = new THREE.PointLight(0xffaa00, 0.5, 3); pl1.position.set(-r, 1.5+(r*0.3), 0); mGroup.add(pl1);
+                             const pl2 = new THREE.PointLight(0xffaa00, 0.5, 3); pl2.position.set(r, 1.5+(r*0.3), 0); mGroup.add(pl2);
+                        });
+                        const cLight = new THREE.PointLight(0xffaa00, 0.5, 3); cLight.position.y = 2.0; mGroup.add(cLight);
+                        mGroup.position.set(gx, iFy, gz); mGroup.rotation.y = Math.PI / 2;
+                        templeGroup.add(mGroup);
+                    };
+
+                    for(let i=0; i<5; i++) {
+                        const mz = veilZ + 2 + (i * 3);
+                        createDetailedMenorah(-4, mz);
+                        createDetailedMenorah(4, mz);
+                    }
+
+                    const cherubH = 10 * CUBIT;
+                    addCyl(templeGroup, 0.5, 0.5, cherubH, 8, mats.gold, -2.5, iFy + cherubH/2, arkZ);
+                    addCyl(templeGroup, 0.5, 0.5, cherubH, 8, mats.gold, 2.5, iFy + cherubH/2, arkZ);
+
+                    const ground = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), mats.ground);
+                    ground.rotation.x = -Math.PI/2; ground.receiveShadow = true;
+                    scene.add(ground); 
+                    scene.add(templeGroup);
+
+                    let yaw = 0, pitch = 0; const speed = 0.15;
+
+                    const animate = () => {
+                        if (isDisposed) return;
+                        animationId = requestAnimationFrame(animate);
+
+                        const { joystick, moveForward, moveBackward, moveLeft, moveRight } = controlsRef.current;
+                        let ix = joystick.x + (moveRight ? 1 : 0) - (moveLeft ? 1 : 0);
+                        let iz = joystick.y + (moveForward ? 1 : 0) - (moveBackward ? 1 : 0);
+
+                        if (Math.abs(ix) > 0.01 || Math.abs(iz) > 0.01) {
+                            const dir = new THREE.Vector3(); camera.getWorldDirection(dir); dir.y = 0; dir.normalize();
+                            const right = new THREE.Vector3(); right.crossVectors(camera.up, dir).negate(); 
+                            const vel = new THREE.Vector3();
+                            vel.addScaledVector(dir, iz); vel.addScaledVector(right, ix);
+                            vel.multiplyScalar(speed);
+                            const nx = camera.position.x + vel.x; const nz = camera.position.z + vel.z;
+
+                            let collide = false;
+                            const pRad = 0.5;
+                            for(let o of obstacles) {
+                                if(o.type === 'rect') {
+                                    if(nx > o.x - o.width/2 - pRad && nx < o.x + o.width/2 + pRad && camera.position.z > o.z - o.depth/2 - pRad && camera.position.z < o.z + o.depth/2 + pRad) collide = true;
+                                    if(camera.position.x > o.x - o.width/2 - pRad && camera.position.x < o.x + o.width/2 + pRad && nz > o.z - o.depth/2 - pRad && nz < o.z + o.depth/2 + pRad) collide = true;
+                                } else {
+                                    if(Math.hypot(nx - o.x, camera.position.z - o.z) < o.radius + pRad) collide = true;
+                                    if(Math.hypot(camera.position.x - o.x, nz - o.z) < o.radius + pRad) collide = true;
+                                }
+                            }
+                            if(!collide) { camera.position.x = nx; camera.position.z = nz; }
+
+                            let ty = 1.7; 
+                            if (Math.abs(camera.position.x) < platW/2 && Math.abs(camera.position.z) < platD/2) {
+                                ty = 1.7 + platformHei;
+                            } else if (Math.abs(camera.position.x) < 5 && camera.position.z >= stairStart && camera.position.z < stairStart + stairLen) {
+                                const pct = 1 - ((camera.position.z - stairStart) / stairLen); 
+                                ty = 1.7 + (Math.max(0, pct) * platformHei);
+                            }
+                            camera.position.y += (ty - camera.position.y) * 0.2;
+                        }
+                        camera.rotation.set(pitch, yaw, 0, 'YXZ');
+                        renderer.render(scene, camera);
+                    };
+                    animate();
+
+                    const handleResize = () => {
+                        if (!container) return;
+                        renderer.setSize(container.clientWidth, container.clientHeight);
+                        camera.aspect = container.clientWidth / container.clientHeight;
+                        camera.updateProjectionMatrix();
+                    };
+                    window.addEventListener('resize', handleResize);
+
+                    let tX=0, tY=0;
+                    const onMouseMove = (e) => {
+                        if(document.pointerLockElement === container || e.buttons === 1) {
+                            yaw -= e.movementX * 0.002; pitch = Math.max(-1, Math.min(1, pitch - e.movementY * 0.002));
+                        }
+                    };
+                    const onTouchMove = (e) => {
+                        if(e.target !== renderer.domElement) return;
+                        e.preventDefault();
+                        const x = e.touches[0].clientX; const y = e.touches[0].clientY;
+                        yaw -= (x - tX) * 0.005; pitch -= (y - tY) * 0.005;
+                        tX = x; tY = y;
+                    };
+                    const onTouchStart = (e) => { if(e.target===renderer.domElement) { tX=e.touches[0].clientX; tY=e.touches[0].clientY; } };
+
+                    container.addEventListener('mousemove', onMouseMove); 
+                    container.addEventListener('touchmove', onTouchMove, {passive:false});
+                    container.addEventListener('touchstart', onTouchStart, {passive:false});
+
+                    const onKeyDown = (e) => {
+                       if(e.key === 'w' || e.key === 'ArrowUp') controlsRef.current.moveForward = true;
+                       if(e.key === 's' || e.key === 'ArrowDown') controlsRef.current.moveBackward = true;
+                       if(e.key === 'a' || e.key === 'ArrowLeft') controlsRef.current.moveLeft = true;
+                       if(e.key === 'd' || e.key === 'ArrowRight') controlsRef.current.moveRight = true;
+                    };
+                    const onKeyUp = (e) => {
+                       if(e.key === 'w' || e.key === 'ArrowUp') controlsRef.current.moveForward = false;
+                       if(e.key === 's' || e.key === 'ArrowDown') controlsRef.current.moveBackward = false;
+                       if(e.key === 'a' || e.key === 'ArrowLeft') controlsRef.current.moveLeft = false;
+                       if(e.key === 'd' || e.key === 'ArrowRight') controlsRef.current.moveRight = false;
+                    };
+                    window.addEventListener('keydown', onKeyDown); window.addEventListener('keyup', onKeyUp);
+
+                    return () => {
+                        isDisposed = true; cancelAnimationFrame(animationId);
+                        window.removeEventListener('resize', handleResize);
+                        if(container) {
+                            container.removeEventListener('mousemove', onMouseMove);
+                            container.removeEventListener('touchmove', onTouchMove);
+                            container.removeEventListener('touchstart', onTouchStart);
+                        }
+                        window.removeEventListener('keydown', onKeyDown); window.removeEventListener('keyup', onKeyUp);
+                        if (container && renderer.domElement && container.contains(renderer.domElement)) container.removeChild(renderer.domElement);
+                        Object.values(mats).forEach(m => m.dispose());
+                    };
+                } catch (err) {
+                    console.error(err); setIsError(true);
+                }
+            }, [resetTrigger]);
+
+            const handleJoystick = (vec) => {
+                controlsRef.current.joystick = vec;
+            };
+
+            if(isError) return <div className="text-red-500 p-4 font-bold">Error initializing 3D Engine. Refreshing might fix it.</div>;
+
+            return (
+                <div className="w-full h-[60vh] md:h-[600px] bg-stone-900 rounded-lg overflow-hidden relative shadow-2xl border-4 border-[#b38728] touch-none">
+                    <div ref={mountRef} className="w-full h-full cursor-move"></div>
+                    <div className="hidden md:block absolute bottom-4 left-4 bg-black/70 text-white p-3 rounded text-sm pointer-events-none select-none">
+                        <p className="font-bold text-[#eab308] mb-1">Controls:</p><p>WASD / Joystick to Walk</p><p>Click & Drag to Look</p>
+                    </div>
+                    <button onClick={() => setResetTrigger(t => t + 1)} className="absolute top-4 right-4 bg-red-600/80 hover:bg-red-600 text-white px-3 py-1 rounded shadow text-xs font-bold z-10">Unstick / Reset</button>
+                    <Joystick onMove={handleJoystick} />
+                    <div className="absolute bottom-6 right-6 pointer-events-none md:hidden text-white/50 text-sm font-bold bg-black/30 px-2 py-1 rounded"><span>Drag to Look ↺</span></div>
+                </div>
+            );
+        };
+
+        const App = () => {
+            const [activeTab, setActiveTab] = useState('map');
+            const [selectedPart, setSelectedPart] = useState(null);
+
+            return (
+                <div className="min-h-screen flex flex-col">
+                    <header className="bg-stone-900 text-[#eab308] p-6 shadow-xl relative overflow-hidden">
+                        <div className="max-w-6xl mx-auto flex flex-col md:flex-row justify-between items-center relative z-10">
+                            <div className="flex items-center gap-4 mb-4 md:mb-0">
+                                <div className="p-3 border-2 border-[#eab308] rounded-full">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 21h18v-8a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v8z"></path><path d="M5 11l4-8 4 8"></path><path d="M15 11l4-8"></path><path d="M12 22v-6"></path></svg>
+                                </div>
+                                <div><h1 className="text-3xl md:text-4xl tracking-wider">SOLOMON'S TEMPLE</h1><p className="text-stone-400 text-sm tracking-widest font-sans">THE HOUSE OF THE LORD</p></div>
+                            </div>
+                        </div>
+                    </header>
+                    <nav className="bg-stone-200 border-b border-stone-300 sticky top-0 z-40 shadow-sm">
+                        <div className="max-w-6xl mx-auto flex justify-center md:justify-start px-4">
+                            <div className="flex space-x-2 pt-2 overflow-x-auto">
+                                <NavButton active={activeTab === 'map'} onClick={() => setActiveTab('map')} label="Interactive Map" icon={<span></span>} />
+                                <NavButton active={activeTab === '3d'} onClick={() => setActiveTab('3d')} label="3D Walkthrough" icon={<span></span>} />
+                                <NavButton active={activeTab === 'learn'} onClick={() => setActiveTab('learn')} label="History" icon={<span></span>} />
+                                <NavButton active={activeTab === 'quiz'} onClick={() => setActiveTab('quiz')} label="Quiz" icon={<span></span>} />
+                            </div>
+                        </div>
+                    </nav>
+                    <main className="flex-grow p-4 md:p-8 max-w-6xl mx-auto w-full">
+                        {activeTab === 'map' && <div className="bg-white p-4 rounded-xl shadow-lg border border-stone-200"><h2 className="text-2xl cinzel text-[#78350f] mb-4">Sanctuary Map [Image of Solomon's Temple Floor Plan]</h2><MapView onSelect={(k)=>setSelectedPart(templeData[k])} /></div>}
+                        {activeTab === '3d' && <div className="animate-fade-in"><h2 className="text-2xl cinzel text-[#78350f] mb-4">3D Temple </h2><Temple3D /></div>}
+                        {activeTab === 'learn' && <LearnSection />}
+                        {activeTab === 'quiz' && <Quiz />}
+                    </main>
+                    <footer className="bg-stone-900 text-stone-500 p-6 text-center text-sm border-t-4 border-[#b38728]">
+                        <p>© 2023 Biblical History Education Project.</p>
+                    </footer>
+                    <Modal data={selectedPart} onClose={() => setSelectedPart(null)} />
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
